@@ -12,10 +12,12 @@ import (
 
 	"github.com/adeharseno/ticket-booking-system/internal/shared"
 	"github.com/adeharseno/ticket-booking-system/internal/ticket"
+	"github.com/adeharseno/ticket-booking-system/internal/transaction"
 )
 
 func main() {
 	_ = godotenv.Load() 
+
 	mode := os.Getenv("RUN_MODE") 
 
 	switch mode {
@@ -39,16 +41,29 @@ func runAPI() {
 		log.Fatalf("failed to connect to database: %v", err)
 	}
 	defer pool.Close()
+
 	
 	ticketRepo := ticket.NewRepository(pool)
 	ticketSvc := ticket.NewService(ticketRepo)
 	ticketHandler := ticket.NewHandler(ticketSvc)
+
+	txQueue := shared.NewInMemoryQueue(1000)
+	txRepo := transaction.NewRepository(pool)
+	txSvc := transaction.NewService(txQueue)
+	txHandler := transaction.NewHandler(txSvc)
+
+	go func() {
+		if err := transaction.RunConsumer(ctx, txQueue, txRepo); err != nil {
+			log.Printf("transaction consumer stopped: %v", err)
+		}
+	}()
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 
 	r.Post("/tickets/purchase", ticketHandler.Purchase)
+	r.Post("/transactions", txHandler.Create)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -62,6 +77,6 @@ func runAPI() {
 }
 
 func runWorker() {
-	log.Println("worker mode: nothing to run yet (Section 2/3 pending)")
+	log.Println("worker mode: nothing to run yet (pending real broker for Section 2, and Section 3 outbox publisher)")
 	select {}
 }
