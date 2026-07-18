@@ -5,12 +5,14 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 
+	"github.com/adeharseno/ticket-booking-system/internal/accounting"
 	"github.com/adeharseno/ticket-booking-system/internal/shared"
 	"github.com/adeharseno/ticket-booking-system/internal/ticket"
 	"github.com/adeharseno/ticket-booking-system/internal/transaction"
@@ -88,6 +90,29 @@ func runAPI() {
 }
 
 func runWorker() {
-	log.Println("worker mode: nothing to run yet (pending real broker for Section 2, and Section 3 outbox publisher)")
-	select {}
+	ctx := context.Background()
+
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://ticketing:ticketing@localhost:5432/ticketing"
+	}
+
+	pool, err := shared.NewPostgresPool(ctx, dsn)
+	if err != nil {
+		log.Fatalf("failed to connect to database: %v", err)
+	}
+	defer pool.Close()
+
+	accountingURL := os.Getenv("ACCOUNTING_API_URL")
+	if accountingURL == "" {
+		accountingURL = "http://localhost:9999"
+	}
+
+	accountingRepo := accounting.NewRepository(pool)
+	accountingClient := accounting.NewHTTPClient(accountingURL)
+	breaker := accounting.NewCircuitBreaker(5, 30*time.Second)
+	publisher := accounting.NewPublisher(accountingRepo, accountingClient, breaker)
+
+	log.Printf("worker mode: polling outbox every 5s, sending to %s", accountingURL)
+	publisher.Run(ctx, 5*time.Second)
 }

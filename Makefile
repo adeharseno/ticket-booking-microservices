@@ -6,6 +6,9 @@ run:
 run-worker:
 	RUN_MODE=worker go run ./cmd
 
+run-mock-accounting:
+	go run ./cmd/mockaccounting
+
 test:
 	go test ./... -race -v
 

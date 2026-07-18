@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/adeharseno/ticket-booking-system/internal/accounting"
 	"github.com/adeharseno/ticket-booking-system/internal/shared"
 )
 
@@ -40,11 +41,30 @@ func NewRepository(pool *pgxpool.Pool) Repository {
 }
 
 func (r *pgRepository) Save(ctx context.Context, req TransactionRequest) error {
-	_, err := r.pool.Exec(ctx,
-		`INSERT INTO transactions (ticket_id, user_id, status) VALUES ($1, $2, 'success')`,
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) 
+
+	var transactionID uuid.UUID
+	err = tx.QueryRow(ctx,
+		`INSERT INTO transactions (ticket_id, user_id, status) VALUES ($1, $2, 'success') RETURNING id`,
 		req.TicketID, req.UserID,
-	)
-	return err
+	).Scan(&transactionID)
+	if err != nil {
+		return err
+	}
+
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+	if err := accounting.SaveOutboxEntryTx(ctx, tx, transactionID, payload); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
 }
 
 func (r *pgRepository) SaveDeadLetter(ctx context.Context, payload []byte, reason string) error {
