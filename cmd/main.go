@@ -14,6 +14,7 @@ import (
 
 	"github.com/adeharseno/ticket-booking-system/internal/accounting"
 	"github.com/adeharseno/ticket-booking-system/internal/shared"
+	"github.com/adeharseno/ticket-booking-system/internal/sync"
 	"github.com/adeharseno/ticket-booking-system/internal/ticket"
 	"github.com/adeharseno/ticket-booking-system/internal/transaction"
 	"github.com/adeharseno/ticket-booking-system/internal/webhook"
@@ -83,6 +84,10 @@ func runAPI() {
 	webhookSvc := webhook.NewService(webhookRepo, idempotencyStore)
 	webhookHandler := webhook.NewHandler(webhookSvc)
 
+	syncRepo := sync.NewRepository(pool)
+	syncSvc := sync.NewService(syncRepo)
+	syncHandler := sync.NewHandler(syncSvc)
+
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
@@ -90,6 +95,7 @@ func runAPI() {
 	r.Post("/tickets/purchase", ticketHandler.Purchase)
 	r.Post("/transactions", txHandler.Create)
 	r.Post("/webhooks/payment", webhookHandler.Payment)
+	r.Post("/sync/ticket-availability", syncHandler.Sync)
 
 	port := os.Getenv("PORT")
 	if port == "" {
