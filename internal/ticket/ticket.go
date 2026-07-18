@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -24,13 +25,12 @@ type PurchaseRequest struct {
 }
 
 type PurchaseResult struct {
-	TransactionID uuid.UUID `json:"transaction_id"`
-	TicketID      uuid.UUID `json:"ticket_id"`
-	Status        string    `json:"status"`
+	TicketID uuid.UUID `json:"ticket_id"`
+	Status   string    `json:"status"`
 }
 
 type Repository interface {
-	Purchase(ctx context.Context, ticketID, userID uuid.UUID) (uuid.UUID, error)
+	DecrementStock(ctx context.Context, ticketID uuid.UUID) (bool, error)
 }
 
 type pgRepository struct {
@@ -41,57 +41,44 @@ func NewRepository(pool *pgxpool.Pool) Repository {
 	return &pgRepository{pool: pool}
 }
 
-func (r *pgRepository) Purchase(ctx context.Context, ticketID, userID uuid.UUID) (uuid.UUID, error) {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return uuid.Nil, err
-	}
-	defer tx.Rollback(ctx)
-
-	tag, err := tx.Exec(ctx,
+func (r *pgRepository) DecrementStock(ctx context.Context, ticketID uuid.UUID) (bool, error) {
+	tag, err := r.pool.Exec(ctx,
 		`UPDATE tickets SET stock = stock - 1 WHERE id = $1 AND stock > 0`,
 		ticketID,
 	)
 	if err != nil {
-		return uuid.Nil, err
+		return false, err
 	}
-	if tag.RowsAffected() == 0 {
-		return uuid.Nil, ErrSoldOut
-	}
+	return tag.RowsAffected() == 1, nil
+}
 
-	var transactionID uuid.UUID
-	err = tx.QueryRow(ctx,
-		`INSERT INTO transactions (ticket_id, user_id, status) VALUES ($1, $2, 'success') RETURNING id`,
-		ticketID, userID,
-	).Scan(&transactionID)
-	if err != nil {
-		return uuid.Nil, err
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return uuid.Nil, err
-	}
-	return transactionID, nil
+type TransactionPublisher interface {
+	Enqueue(ctx context.Context, ticketID, userID uuid.UUID) error
 }
 
 type Service struct {
-	repo Repository
+	repo      Repository
+	publisher TransactionPublisher
 }
 
-func NewService(repo Repository) *Service {
-	return &Service{repo: repo}
+func NewService(repo Repository, publisher TransactionPublisher) *Service {
+	return &Service{repo: repo, publisher: publisher}
 }
 
 func (s *Service) Purchase(ctx context.Context, req PurchaseRequest) (*PurchaseResult, error) {
-	transactionID, err := s.repo.Purchase(ctx, req.TicketID, req.UserID)
+	ok, err := s.repo.DecrementStock(ctx, req.TicketID)
 	if err != nil {
 		return nil, err
 	}
-	return &PurchaseResult{
-		TransactionID: transactionID,
-		TicketID:      req.TicketID,
-		Status:        "success",
-	}, nil
+	if !ok {
+		return nil, ErrSoldOut
+	}
+
+	if err := s.publisher.Enqueue(ctx, req.TicketID, req.UserID); err != nil {
+		log.Printf("ticket: purchase succeeded but failed to enqueue transaction for ticket %s: %v", req.TicketID, err)
+	}
+
+	return &PurchaseResult{TicketID: req.TicketID, Status: "success"}, nil
 }
 
 type Handler struct {

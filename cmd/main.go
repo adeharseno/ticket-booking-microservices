@@ -8,12 +8,24 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 
 	"github.com/adeharseno/ticket-booking-system/internal/shared"
 	"github.com/adeharseno/ticket-booking-system/internal/ticket"
 	"github.com/adeharseno/ticket-booking-system/internal/transaction"
 )
+
+type txPublisherAdapter struct {
+	svc *transaction.Service
+}
+
+func (a *txPublisherAdapter) Enqueue(ctx context.Context, ticketID, userID uuid.UUID) error {
+	return a.svc.Enqueue(ctx, transaction.TransactionRequest{
+		TicketID: ticketID,
+		UserID:   userID,
+	})
+}
 
 func main() {
 	_ = godotenv.Load() 
@@ -42,11 +54,6 @@ func runAPI() {
 	}
 	defer pool.Close()
 
-	
-	ticketRepo := ticket.NewRepository(pool)
-	ticketSvc := ticket.NewService(ticketRepo)
-	ticketHandler := ticket.NewHandler(ticketSvc)
-
 	txQueue := shared.NewInMemoryQueue(1000)
 	txRepo := transaction.NewRepository(pool)
 	txSvc := transaction.NewService(txQueue)
@@ -57,6 +64,10 @@ func runAPI() {
 			log.Printf("transaction consumer stopped: %v", err)
 		}
 	}()
+
+	ticketRepo := ticket.NewRepository(pool)
+	ticketSvc := ticket.NewService(ticketRepo, &txPublisherAdapter{svc: txSvc})
+	ticketHandler := ticket.NewHandler(ticketSvc)
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)

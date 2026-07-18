@@ -16,20 +16,30 @@ type fakeRepository struct {
 	stock int
 }
 
-func (f *fakeRepository) Purchase(ctx context.Context, ticketID, userID uuid.UUID) (uuid.UUID, error) {
+func (f *fakeRepository) DecrementStock(ctx context.Context, ticketID uuid.UUID) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	if f.stock <= 0 {
-		return uuid.Nil, ErrSoldOut
+		return false, nil
 	}
 	f.stock--
-	return uuid.New(), nil
+	return true, nil
+}
+
+type fakePublisher struct {
+	enqueued int32
+}
+
+func (f *fakePublisher) Enqueue(ctx context.Context, ticketID, userID uuid.UUID) error {
+	atomic.AddInt32(&f.enqueued, 1)
+	return nil
 }
 
 func TestPurchase_OnlyOneSucceedsWhenStockIsOne(t *testing.T) {
 	repo := &fakeRepository{stock: 1}
-	svc := NewService(repo)
+	publisher := &fakePublisher{}
+	svc := NewService(repo, publisher)
 
 	const numRequests = 20
 	var successCount int32
@@ -56,4 +66,5 @@ func TestPurchase_OnlyOneSucceedsWhenStockIsOne(t *testing.T) {
 
 	assert.EqualValues(t, 1, successCount, "exactly 1 purchase should succeed when stock is 1")
 	assert.EqualValues(t, numRequests-1, soldOutCount, "the rest should receive ErrSoldOut")
+	assert.EqualValues(t, 1, publisher.enqueued, "only the successful purchase should be enqueued for recording")
 }
