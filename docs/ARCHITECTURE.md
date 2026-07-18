@@ -126,6 +126,49 @@ Unlike the reservation consumer, the outbox publisher runs as a separate process
 
 ---
 
-## Section 4 - Duplicate request
+# Section 4 - Duplicate Request
+
+## Problem
+
+The payment provider retries webhooks on network failures, and can send the same payment payload twice, sometimes at nearly the same time. A plain "check if it exists, then insert" doesn't hold up under that - two requests can both pass the check before either one writes.
+
+## Solution
+
+Two layers.
+
+Fast path: Redis `SETNX` on the payment_id. If the key's already set, this is a duplicate, return success immediately without touching the database.
+
+```go
+isNew, err := s.store.SetIfNotExists(ctx, "webhook:payment:"+payload.PaymentID, time.Hour)
+if !isNew {
+    return nil
+}
+```
+
+Safety net: `transaction_payment.payment_id` has a UNIQUE constraint, and the insert uses `ON CONFLICT DO NOTHING`. Even if two requests both get past the Redis check - Redis down, or a race on the SETNX itself - the second insert is just a no-op instead of a duplicate row or an error.
+
+```sql
+INSERT INTO transaction_payment (payment_id, transaction_id, amount, status)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (payment_id) DO NOTHING;
+```
+
+The handler always responds `200 OK` for a duplicate, not an error - returning an error would just make the provider retry again.
+
+## Why two layers?
+
+Redis alone is fast but not guaranteed - if it's down or the key expires, there's nothing stopping a duplicate. The unique constraint alone works but means every duplicate still costs a DB round trip. Together: cheap and fast for the common case, still correct if the cache layer fails.
+
+Tested both paths directly - one test with a normal fake store to confirm Redis catches duplicates, and a second test using a store that always reports "new" (simulating Redis failing to dedupe), which confirms the unique constraint alone is enough to keep it to one row.
+
+## Trade-offs
+
+| Decision | Reason |
+|---|---|
+| Redis SETNX as fast path | Cheap check, avoids a DB hit for the common duplicate case |
+| Unique constraint as safety net | Guarantees correctness even if Redis is unavailable |
+| Always return 200 for duplicates | Prevents the third party from retrying indefinitely |
+
+--- 
 
 ## Section 5 - Data synchronization

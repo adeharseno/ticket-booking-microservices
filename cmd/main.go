@@ -16,6 +16,7 @@ import (
 	"github.com/adeharseno/ticket-booking-system/internal/shared"
 	"github.com/adeharseno/ticket-booking-system/internal/ticket"
 	"github.com/adeharseno/ticket-booking-system/internal/transaction"
+	"github.com/adeharseno/ticket-booking-system/internal/webhook"
 )
 
 type txPublisherAdapter struct {
@@ -30,9 +31,9 @@ func (a *txPublisherAdapter) Enqueue(ctx context.Context, ticketID, userID uuid.
 }
 
 func main() {
-	_ = godotenv.Load() 
+	_ = godotenv.Load()
 
-	mode := os.Getenv("RUN_MODE") 
+	mode := os.Getenv("RUN_MODE")
 
 	switch mode {
 	case "worker":
@@ -71,12 +72,24 @@ func runAPI() {
 	ticketSvc := ticket.NewService(ticketRepo, &txPublisherAdapter{svc: txSvc})
 	ticketHandler := ticket.NewHandler(ticketSvc)
 
+	redisAddr := os.Getenv("REDIS_ADDR")
+	if redisAddr == "" {
+		redisAddr = "localhost:6379"
+	}
+	redisClient := shared.NewRedisClient(redisAddr)
+
+	webhookRepo := webhook.NewRepository(pool)
+	idempotencyStore := webhook.NewRedisIdempotencyStore(redisClient)
+	webhookSvc := webhook.NewService(webhookRepo, idempotencyStore)
+	webhookHandler := webhook.NewHandler(webhookSvc)
+
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 
 	r.Post("/tickets/purchase", ticketHandler.Purchase)
 	r.Post("/transactions", txHandler.Create)
+	r.Post("/webhooks/payment", webhookHandler.Payment)
 
 	port := os.Getenv("PORT")
 	if port == "" {
