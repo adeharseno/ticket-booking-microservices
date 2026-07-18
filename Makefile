@@ -10,7 +10,11 @@ test:
 	go test ./... -race -v
 
 migrate-up:
-	@echo "TODO: wire up a migration tool (e.g. golang-migrate) pointing at migrations/"
+	@for f in migrations/*.sql; do \
+		echo "Applying $$f"; \
+		docker compose -f deployment/docker-compose.yml exec -T postgres \
+			psql -U ticketing -d ticketing < $$f; \
+	done
 
 infra-up:
 	docker compose -f deployment/docker-compose.yml up -d

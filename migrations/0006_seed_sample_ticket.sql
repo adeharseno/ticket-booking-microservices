@@ -1,0 +1,3 @@
+INSERT INTO tickets (id, name, stock)
+VALUES ('11111111-1111-1111-1111-111111111111', 'VIP Concert Ticket', 1)
+ON CONFLICT (id) DO NOTHING;
