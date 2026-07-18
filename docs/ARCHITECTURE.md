@@ -17,6 +17,8 @@ UPDATE tickets
 SET stock = stock - 1
 WHERE id = $1
   AND stock > 0;
+```
+
 After executing the query, the application checks RowsAffected().
 
 1 → purchase succeeds.
